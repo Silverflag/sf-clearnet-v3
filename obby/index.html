@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Image to .obby Converter</title>
+    <style>
+        body { font-family: monospace; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .preview { margin: 20px 0; }
+        canvas { border: 1px solid #000; }
+        .controls { margin: 10px 0; }
+        .stats { margin: 10px 0; padding: 10px; background: #f0f0f0; }
+        .visualization { margin-top: 20px; }
+        .canvas-container { display: flex; gap: 20px; }
+        .canvas-wrapper { flex: 1; }
+        .dimension-controls { margin: 10px 0; }
+        .active { background-color: #4CAF50; color: white; }
+        .dropzone { 
+            border: 2px dashed #ccc; 
+            border-radius: 5px; 
+            padding: 20px; 
+            text-align: center; 
+            margin: 10px 0;
+            background-color: #f9f9f9;
+        }
+        .dropzone.highlight { border-color: #4CAF50; background-color: #e8f5e9; }
+        .workflow { 
+            background-color: #f0f0f0; 
+            padding: 10px; 
+            margin: 10px 0; 
+            border-radius: 5px;
+        }
+        .step { margin-bottom: 5px; }
+        .current-step { font-weight: bold; color: #4CAF50; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Image to .obby Converter</h1>
+        
+        <div class="workflow">
+            <div class="step" id="step1">1. Upload image or .obby file</div>
+            <div class="step" id="step2">2. Define settings (threshold, dimensions)</div>
+            <div class="step" id="step3">3. Preview and optimize path</div>
+        </div>
+        
+        <div class="dropzone" id="dropzone">
+            Drag and drop an image or .obby file here<br>
+            <small>or</small><br>
+            <input type="file" id="fileInput" accept="image/*,.obby">
+        </div>
+        
+        <div class="controls">
+            <div class="dimension-controls">
+                <label>Width: <input type="number" id="width" min="1" value="50"></label>
+                <label>Height: <input type="number" id="height" min="1" value="50"></label>
+                <button id="maintainAspect">Maintain Aspect Ratio</button>
+            </div>
+            <label>Threshold: <input type="range" id="threshold" min="0" max="255" value="128"></label>
+            <span id="thresholdValue">128</span>
+            <br>
+            <label>Top Left X: <input type="number" id="startX" value="0"></label>
+            <label>Top Left Z: <input type="number" id="startZ" value="0"></label>
+            <br>
+            <button id="invert">Invert Colors</button>
+            <button id="optimize">Optimize Path</button>
+            <button id="generate">Generate .obby</button>
+            <button id="visualize">Visualize Path</button>
+        </div>
+
+        <div class="preview">
+            <div class="canvas-container">
+                <div class="canvas-wrapper">
+                    <h3>Preview</h3>
+                    <canvas id="previewCanvas"></canvas>
+                </div>
+                <div class="canvas-wrapper">
+                    <h3>Path Visualization</h3>
+                    <canvas id="pathCanvas"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats" id="stats">
+            No image loaded
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('previewCanvas');
+        const pathCanvas = document.getElementById('pathCanvas');
+        const ctx = canvas.getContext('2d');
+        const pathCtx = pathCanvas.getContext('2d');
+        const widthInput = document.getElementById('width');
+        const heightInput = document.getElementById('height');
+        const thresholdInput = document.getElementById('threshold');
+        const startXInput = document.getElementById('startX');
+        const startZInput = document.getElementById('startZ');
+        const statsDiv = document.getElementById('stats');
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('fileInput');
+        let originalImage = null;
+        let currentPath = null;
+        let aspectRatio = 1;
+        let isInverted = false;
+        let isPathOptimized = false;
+
+        // Highlight steps
+        function setCurrentStep(step) {
+            document.querySelectorAll('.step').forEach(el => el.classList.remove('current-step'));
+            document.getElementById('step' + step).classList.add('current-step');
+        }
+        setCurrentStep(1);
+
+        // Drag and drop handling
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropzone.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropzone.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropzone.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight() {
+            dropzone.classList.add('highlight');
+        }
+
+        function unhighlight() {
+            dropzone.classList.remove('highlight');
+        }
+
+        dropzone.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles(files);
+        }
+
+        fileInput.addEventListener('change', function() {
+            handleFiles(this.files);
+        });
+
+        function handleFiles(files) {
+            if (files.length === 0) return;
+            
+            const file = files[0];
+            
+            if (file.name.toLowerCase().endsWith('.obby')) {
+                // Handle .obby file
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    loadObbyFile(e.target.result);
+                };
+                reader.readAsText(file);
+            } else {
+                // Handle image file
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const img = new Image();
+                    img.onload = function() {
+                        originalImage = img;
+                        aspectRatio = img.width / img.height;
+                        widthInput.value = Math.floor(img.width / 2);
+                        heightInput.value = Math.floor(img.height / 2);
+                        setCurrentStep(2);
+                        updatePreview();
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        function loadObbyFile(content) {
+            // Parse .obby file
+            const lines = content.split('\n');
+            const coordinates = [];
+            
+            lines.forEach(line => {
+                line = line.trim();
+                if (line && !line.startsWith('#')) {
+                    const [x, z] = line.split(',').map(Number);
+                    coordinates.push({x, y: z}); // Note: obby file has x,z but we use x,y in canvas
+                }
+            });
+            
+            if (coordinates.length === 0) {
+                statsDiv.textContent = "No valid coordinates found in the .obby file";
+                return;
+            }
+            
+            // Find bounding box
+            let minX = Infinity, minY = Infinity;
+            let maxX = -Infinity, maxY = -Infinity;
+            
+            coordinates.forEach(coord => {
+                minX = Math.min(minX, coord.x);
+                minY = Math.min(minY, coord.y);
+                maxX = Math.max(maxX, coord.x);
+                maxY = Math.max(maxY, coord.y);
+            });
+            
+            // Normalize coordinates and create image data
+            const width = maxX - minX + 1;
+            const height = maxY - minY + 1;
+            
+            // Set inputs
+            widthInput.value = width;
+            heightInput.value = height;
+            startXInput.value = minX;
+            startZInput.value = minY;
+            
+            // Create binary image representation
+            canvas.width = width;
+            canvas.height = height;
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, width, height);
+            ctx.fillStyle = 'black';
+            
+            coordinates.forEach(coord => {
+                const x = coord.x - minX;
+                const y = coord.y - minY;
+                ctx.fillRect(x, y, 1, 1);
+            });
+            
+            // Set current path
+            currentPath = coordinates.map(coord => ({
+                x: coord.x - minX,
+                y: coord.y - minY
+            }));
+            
+            // Draw path
+            visualizePath();
+            
+            // Update stats
+            const shulkerBoxes = Math.ceil(coordinates.length / 27);
+            statsDiv.textContent = `Loaded .obby file with ${coordinates.length} blocks (${shulkerBoxes} shulker boxes)`;
+            
+            // No original image, but we have path
+            originalImage = null;
+            setCurrentStep(3);
+        }
+
+        // Event listeners for inputs
+        widthInput.addEventListener('input', function() {
+            if (document.getElementById('maintainAspect').classList.contains('active')) {
+                heightInput.value = Math.floor(widthInput.value / aspectRatio);
+            }
+            setCurrentStep(2);
+            updatePreview();
+        });
+
+        heightInput.addEventListener('input', function() {
+            if (document.getElementById('maintainAspect').classList.contains('active')) {
+                widthInput.value = Math.floor(heightInput.value * aspectRatio);
+            }
+            setCurrentStep(2);
+            updatePreview();
+        });
+
+        thresholdInput.addEventListener('input', function() {
+            document.getElementById('thresholdValue').textContent = thresholdInput.value;
+            setCurrentStep(2);
+            updatePreview();
+        });
+
+        document.getElementById('maintainAspect').addEventListener('click', function() {
+            this.classList.toggle('active');
+            if (this.classList.contains('active')) {
+                heightInput.value = Math.floor(widthInput.value / aspectRatio);
+                updatePreview();
+            }
+        });
+
+        document.getElementById('invert').addEventListener('click', function() {
+            isInverted = !isInverted;
+            this.classList.toggle('active');
+            setCurrentStep(2);
+            updatePreview();
+        });
+
+        document.getElementById('optimize').addEventListener('click', function() {
+            optimizePath();
+            this.classList.add('active');
+            isPathOptimized = true;
+            setCurrentStep(3);
+        });
+
+        function updatePreview() {
+            if (!originalImage) return;
+            
+            const width = parseInt(widthInput.value);
+            const height = parseInt(heightInput.value);
+            const threshold = parseInt(thresholdInput.value);
+            
+            canvas.width = width;
+            canvas.height = height;
+            pathCanvas.width = width;
+            pathCanvas.height = height;
+            
+            ctx.drawImage(originalImage, 0, 0, width, height);
+            const imageData = ctx.getImageData(0, 0, width, height);
+            const data = imageData.data;
+            
+            for (let i = 0; i < data.length; i += 4) {
+                const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                const value = isInverted ? 
+                    (avg <= threshold ? 255 : 0) : 
+                    (avg > threshold ? 255 : 0);
+                data[i] = data[i + 1] = data[i + 2] = value;
+            }
+            
+            ctx.putImageData(imageData, 0, 0);
+            
+            const blackPixels = data.filter((v, i) => i % 4 === 0 && v === 0).length;
+            const shulkerBoxes = Math.ceil(blackPixels / 27);
+            statsDiv.textContent = `Blocks needed: ${blackPixels} (${shulkerBoxes} shulker boxes)`;
+            
+            // Reset optimized state
+            document.getElementById('optimize').classList.remove('active');
+            isPathOptimized = false;
+            
+            // Update path
+            currentPath = generatePath();
+        }
+
+        function generatePath() {
+            if (!originalImage) return null;
+            
+            const width = parseInt(widthInput.value);
+            const height = parseInt(heightInput.value);
+            const threshold = parseInt(thresholdInput.value);
+            
+            canvas.width = width;
+            canvas.height = height;
+            ctx.drawImage(originalImage, 0, 0, width, height);
+            const imageData = ctx.getImageData(0, 0, width, height);
+            const data = imageData.data;
+            
+            let path = [];
+            
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const i = (y * width + x) * 4;
+                    const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                    const isBlack = isInverted ? 
+                        (avg > threshold) : 
+                        (avg <= threshold);
+                    if (isBlack) {
+                        path.push({x, y});
+                    }
+                }
+            }
+            
+            return path;
+        }
+
+        function optimizePath() {
+            if (!currentPath || currentPath.length < 2) return;
+            
+            // Simple nearest neighbor algorithm
+            const optimizedPath = [];
+            const unvisited = [...currentPath];
+            
+            // Start with the first point
+            let current = unvisited.shift();
+            optimizedPath.push(current);
+            
+            // While we have unvisited points
+            while (unvisited.length > 0) {
+                // Find nearest neighbor
+                let nearestIndex = 0;
+                let minDistance = distance(current, unvisited[0]);
+                
+                for (let i = 1; i < unvisited.length; i++) {
+                    const d = distance(current, unvisited[i]);
+                    if (d < minDistance) {
+                        minDistance = d;
+                        nearestIndex = i;
+                    }
+                }
+                
+                // Add nearest to path and remove from unvisited
+                current = unvisited[nearestIndex];
+                optimizedPath.push(current);
+                unvisited.splice(nearestIndex, 1);
+            }
+            
+            currentPath = optimizedPath;
+            visualizePath();
+        }
+        
+        function distance(a, b) {
+            return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
+        }
+
+        function visualizePath() {
+            if (!currentPath || currentPath.length === 0) return;
+            
+            pathCanvas.width = canvas.width;
+            pathCanvas.height = canvas.height;
+            
+            // Clear canvas
+            pathCtx.fillStyle = 'white';
+            pathCtx.fillRect(0, 0, pathCanvas.width, pathCanvas.height);
+            
+            // Draw blocks
+            pathCtx.fillStyle = 'black';
+            currentPath.forEach(point => {
+                pathCtx.fillRect(point.x, point.y, 1, 1);
+            });
+            
+            // Draw path
+            pathCtx.beginPath();
+            pathCtx.strokeStyle = 'red';
+            pathCtx.lineWidth = 0.5;
+            
+            currentPath.forEach((point, i) => {
+                if (i === 0) {
+                    pathCtx.moveTo(point.x + 0.5, point.y + 0.5); // Center of pixel
+                } else {
+                    pathCtx.lineTo(point.x + 0.5, point.y + 0.5);
+                }
+            });
+            
+            pathCtx.stroke();
+            
+            // Draw start and end points
+            if (currentPath.length > 0) {
+                // Start point (green)
+                pathCtx.fillStyle = 'green';
+                pathCtx.beginPath();
+                pathCtx.arc(currentPath[0].x + 0.5, currentPath[0].y + 0.5, 2, 0, Math.PI * 2);
+                pathCtx.fill();
+                
+                // End point (blue)
+                pathCtx.fillStyle = 'blue';
+                pathCtx.beginPath();
+                pathCtx.arc(currentPath[currentPath.length - 1].x + 0.5, currentPath[currentPath.length - 1].y + 0.5, 2, 0, Math.PI * 2);
+                pathCtx.fill();
+            }
+            
+            setCurrentStep(3);
+        }
+
+        document.getElementById('generate').addEventListener('click', function() {
+            if (!currentPath || currentPath.length === 0) {
+                if (originalImage) {
+                    currentPath = generatePath();
+                } else {
+                    return;
+                }
+            }
+            
+            const startX = parseInt(startXInput.value);
+            const startZ = parseInt(startZInput.value);
+            
+            let obbyContent = `# Generated obby file\n# Created with Image to .obby Converter\n`;
+            currentPath.forEach(point => {
+                obbyContent += `${startX + point.x},${startZ + point.y}\n`;
+            });
+            
+            const blob = new Blob([obbyContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'generated.obby';
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            const shulkerBoxes = Math.ceil(currentPath.length / 27);
+            statsDiv.textContent = `Generated .obby file with ${currentPath.length} blocks (${shulkerBoxes} shulker boxes)`;
+        });
+
+        document.getElementById('visualize').addEventListener('click', function() {
+            if (!currentPath) {
+                currentPath = generatePath();
+            }
+            visualizePath();
+        });
+    </script>
+</body>
+</html> 

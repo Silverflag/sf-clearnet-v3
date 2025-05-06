@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Image to .wool Converter</title>
+    <style>
+        body { font-family: monospace; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .preview { margin: 20px 0; }
+        canvas { border: 1px solid #000; }
+        .controls { margin: 10px 0; }
+        .stats { margin: 10px 0; padding: 10px; background: #f0f0f0; }
+        .canvas-container { display: flex; gap: 20px; }
+        .canvas-wrapper { flex: 1; }
+        .dimension-controls { margin: 10px 0; }
+        .active { background-color: #4CAF50; color: white; }
+        .color-mapping { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 10px; }
+        .wool-color { display: flex; align-items: center; padding: 2px; }
+        .color-box { width: 15px; height: 15px; margin-right: 5px; border: 1px solid #000; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Image to .wool Converter</h1>
+        
+        <div class="controls">
+            <input type="file" id="imageInput" accept="image/*">
+            <br>
+            <div class="dimension-controls">
+                <label>Width: <input type="number" id="width" min="1" value="50"></label>
+                <label>Height: <input type="number" id="height" min="1" value="50"></label>
+                <button id="maintainAspect">Maintain Aspect Ratio</button>
+            </div>
+            <label>Top Left X: <input type="number" id="startX" value="0"></label>
+            <label>Top Left Z: <input type="number" id="startZ" value="0"></label>
+            <br>
+            <button id="generate">Generate .wool</button>
+            <button id="visualize">Visualize Colors</button>
+        </div>
+
+        <div class="preview">
+            <div class="canvas-container">
+                <div class="canvas-wrapper">
+                    <h3>Preview</h3>
+                    <canvas id="previewCanvas"></canvas>
+                </div>
+                <div class="canvas-wrapper">
+                    <h3>Color Visualization</h3>
+                    <canvas id="woolCanvas"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats" id="stats">
+            No image loaded
+        </div>
+
+        <h3>Wool Color Mapping</h3>
+        <div class="color-mapping" id="colorMapping">
+            <!-- Will be populated dynamically -->
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('previewCanvas');
+        const woolCanvas = document.getElementById('woolCanvas');
+        const ctx = canvas.getContext('2d');
+        const woolCtx = woolCanvas.getContext('2d');
+        const widthInput = document.getElementById('width');
+        const heightInput = document.getElementById('height');
+        const startXInput = document.getElementById('startX');
+        const startZInput = document.getElementById('startZ');
+        const statsDiv = document.getElementById('stats');
+        const colorMappingDiv = document.getElementById('colorMapping');
+        let originalImage = null;
+        let aspectRatio = 1;
+        
+        // Define wool colors
+        const woolColors = [
+            { id: 0, name: "White", rgb: [255, 255, 255] },
+            { id: 1, name: "Orange", rgb: [216, 127, 51] },
+            { id: 2, name: "Magenta", rgb: [178, 76, 216] },
+            { id: 3, name: "Light Blue", rgb: [102, 153, 216] },
+            { id: 4, name: "Yellow", rgb: [229, 229, 51] },
+            { id: 5, name: "Lime", rgb: [127, 204, 25] },
+            { id: 6, name: "Pink", rgb: [242, 127, 165] },
+            { id: 7, name: "Gray", rgb: [76, 76, 76] },
+            { id: 8, name: "Light Gray", rgb: [153, 153, 153] },
+            { id: 9, name: "Cyan", rgb: [76, 127, 153] },
+            { id: 10, name: "Purple", rgb: [127, 63, 178] },
+            { id: 11, name: "Blue", rgb: [51, 76, 178] },
+            { id: 12, name: "Brown", rgb: [102, 76, 51] },
+            { id: 13, name: "Green", rgb: [102, 127, 51] },
+            { id: 14, name: "Red", rgb: [153, 51, 51] },
+            { id: 15, name: "Black", rgb: [25, 25, 25] }
+        ];
+
+        // Populate color mapping display
+        woolColors.forEach(color => {
+            const div = document.createElement('div');
+            div.className = 'wool-color';
+            
+            const colorBox = document.createElement('div');
+            colorBox.className = 'color-box';
+            colorBox.style.backgroundColor = `rgb(${color.rgb[0]}, ${color.rgb[1]}, ${color.rgb[2]})`;
+            
+            const label = document.createElement('span');
+            label.textContent = `${color.id}: ${color.name}`;
+            
+            div.appendChild(colorBox);
+            div.appendChild(label);
+            colorMappingDiv.appendChild(div);
+        });
+
+        // Find closest wool color
+        function findClosestWoolColor(r, g, b) {
+            let closestColor = 0;
+            let closestDistance = Number.MAX_VALUE;
+            
+            for (const color of woolColors) {
+                const dr = r - color.rgb[0];
+                const dg = g - color.rgb[1];
+                const db = b - color.rgb[2];
+                const distance = dr*dr + dg*dg + db*db;
+                
+                if (distance < closestDistance) {
+                    closestDistance = distance;
+                    closestColor = color.id;
+                }
+            }
+            
+            return closestColor;
+        }
+
+        document.getElementById('imageInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const img = new Image();
+                    img.onload = function() {
+                        originalImage = img;
+                        aspectRatio = img.width / img.height;
+                        widthInput.value = Math.min(100, img.width);
+                        heightInput.value = Math.min(100, img.height);
+                        updatePreview();
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        widthInput.addEventListener('input', function() {
+            if (document.getElementById('maintainAspect').classList.contains('active')) {
+                heightInput.value = Math.floor(widthInput.value / aspectRatio);
+            }
+            updatePreview();
+        });
+
+        heightInput.addEventListener('input', function() {
+            if (document.getElementById('maintainAspect').classList.contains('active')) {
+                widthInput.value = Math.floor(heightInput.value * aspectRatio);
+            }
+            updatePreview();
+        });
+
+        document.getElementById('maintainAspect').addEventListener('click', function() {
+            this.classList.toggle('active');
+            if (this.classList.contains('active')) {
+                heightInput.value = Math.floor(widthInput.value / aspectRatio);
+                updatePreview();
+            }
+        });
+
+        function updatePreview() {
+            if (!originalImage) return;
+            
+            const width = parseInt(widthInput.value);
+            const height = parseInt(heightInput.value);
+            
+            canvas.width = width;
+            canvas.height = height;
+            woolCanvas.width = width;
+            woolCanvas.height = height;
+            
+            // Draw original image
+            ctx.drawImage(originalImage, 0, 0, width, height);
+            
+            // Create pixel data for statistics
+            const imageData = ctx.getImageData(0, 0, width, height);
+            const data = imageData.data;
+            
+            // Count colors
+            let colorCounts = Array(16).fill(0);
+            let totalPixels = 0;
+            
+            // Clear wool canvas
+            woolCtx.clearRect(0, 0, width, height);
+            
+            // Process each pixel
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const i = (y * width + x) * 4;
+                    const r = data[i];
+                    const g = data[i + 1];
+                    const b = data[i + 2];
+                    const a = data[i + 3];
+                    
+                    // Skip transparent pixels
+                    if (a < 128) continue;
+                    
+                    const colorId = findClosestWoolColor(r, g, b);
+                    colorCounts[colorId]++;
+                    totalPixels++;
+                    
+                    // Draw wool color representation
+                    woolCtx.fillStyle = `rgb(${woolColors[colorId].rgb[0]}, ${woolColors[colorId].rgb[1]}, ${woolColors[colorId].rgb[2]})`;
+                    woolCtx.fillRect(x, y, 1, 1);
+                }
+            }
+            
+            // Update statistics
+            const shulkerBoxes = Math.ceil(totalPixels / 27);
+            let statsHTML = `Total blocks: ${totalPixels} (${shulkerBoxes} shulker boxes)<br>Color distribution:<br>`;
+            
+            for (let i = 0; i < 16; i++) {
+                if (colorCounts[i] > 0) {
+                    const percentage = (colorCounts[i] / totalPixels * 100).toFixed(1);
+                    statsHTML += `${woolColors[i].name}: ${colorCounts[i]} (${percentage}%)<br>`;
+                }
+            }
+            
+            statsDiv.innerHTML = statsHTML;
+        }
+
+        // Generate wool coordinates grouped by color
+        function generateWoolCoordinates() {
+            if (!originalImage) return null;
+            
+            const width = parseInt(widthInput.value);
+            const height = parseInt(heightInput.value);
+            const startX = parseInt(startXInput.value);
+            const startZ = parseInt(startZInput.value);
+            
+            canvas.width = width;
+            canvas.height = height;
+            ctx.drawImage(originalImage, 0, 0, width, height);
+            
+            const imageData = ctx.getImageData(0, 0, width, height);
+            const data = imageData.data;
+            
+            // Group coordinates by color
+            const colorGroups = {};
+            
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const i = (y * width + x) * 4;
+                    const r = data[i];
+                    const g = data[i + 1];
+                    const b = data[i + 2];
+                    const a = data[i + 3];
+                    
+                    // Skip transparent pixels
+                    if (a < 128) continue;
+                    
+                    const colorId = findClosestWoolColor(r, g, b);
+                    
+                    if (!colorGroups[colorId]) {
+                        colorGroups[colorId] = [];
+                    }
+                    
+                    colorGroups[colorId].push({
+                        x: startX + x,
+                        z: startZ + y
+                    });
+                }
+            }
+            
+            return colorGroups;
+        }
+
+        // Visualize wool colors
+        document.getElementById('visualize').addEventListener('click', function() {
+            if (!originalImage) return;
+            updatePreview();
+        });
+
+        // Generate .wool file
+        document.getElementById('generate').addEventListener('click', function() {
+            if (!originalImage) return;
+            
+            const colorGroups = generateWoolCoordinates();
+            if (!colorGroups) return;
+            
+            let woolContent = `# Wool Art generated from image\n\n`;
+            
+            // Count total blocks
+            let totalBlocks = 0;
+            
+            for (const colorId in colorGroups) {
+                const colorName = woolColors[colorId].name;
+                const count = colorGroups[colorId].length;
+                totalBlocks += count;
+                
+                woolContent += `# ${colorName} wool (${count} blocks)\n`;
+                woolContent += `color: ${colorId}\n`;
+                
+                for (const coord of colorGroups[colorId]) {
+                    woolContent += `${coord.x},${coord.z}\n`;
+                }
+                
+                woolContent += "\n";
+            }
+            
+            const blob = new Blob([woolContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'generated.wool';
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            const shulkerBoxes = Math.ceil(totalBlocks / 27);
+            statsDiv.innerHTML = `<strong>Generated .wool file with ${totalBlocks} blocks (${shulkerBoxes} shulker boxes)</strong><br>` + statsDiv.innerHTML;
+        });
+    </script>
+</body>
+</html> 
